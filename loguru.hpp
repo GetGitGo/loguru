@@ -271,8 +271,8 @@ namespace loguru
 	class LOGURU_EXPORT Text
 	{
 	public:
-		explicit Text(char* owned_str) : _str(owned_str) {}
-		~Text();
+		explicit Text(char* owned_str) : _str(owned_str) {} /// 禁止 char* 隐式转为 Text；构造函数体执行前，用 owned_str 初始化私有成员 _str
+		~Text(); 
 		Text(Text&& t)
 		{
 			_str = t._str;
