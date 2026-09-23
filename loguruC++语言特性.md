@@ -1,3 +1,4 @@
+注意：文件中的位置信息只在刚刚Fork后的版本中有效
 这两个文件以 **C++11** 为上限。`loguru.hpp` 放接口、宏和模板，`loguru.cpp` 放实现。没有 `constexpr`、`static_assert`、`enum class`、`if constexpr`、折叠表达式、结构化绑定，也没有智能指针。
 
 ## C++11 语言特性

@@ -86,6 +86,10 @@ Website: www.ilikebigbits.com
 // Disable all warnings from gcc/clang:
 #if defined(__clang__)
 	#pragma clang system_header
+	//^ 让 Clang 把本文件此后的内容当成系统头文件处理，从而抑制这里产生的 warning。
+	//^ 它只在 __clang__ 下生效。下一行 #pragma GCC system_header 是 GCC 的对应写法。
+	//^ 效果接近用 -isystem 包含头文件：库自身的风格、未使用变量等 warning 不会冒到你的编译输出里。
+	//^ error 仍然报，加 -Wsystem-headers 时 warning 也会重新出现。
 #elif defined(__GNUC__)
 	#pragma GCC system_header
 #endif
@@ -184,6 +188,14 @@ Website: www.ilikebigbits.com
 #endif
 
 #ifndef LOGURU_RTTI
+//^ RTTI（Run-Time Type Information）是 C++ 的运行时类型信息。开着它才能用 typeid 和 dynamic_cast 在运行时查对象的真实类型。编译加 -fno-rtti（MSVC 是 /GR-）就会关掉。
+//^ 这段在你没手动定义 LOGURU_RTTI 时，按编译器探测 RTTI 是否开启：
+//^ 编译器	探测宏
+//^ Clang __has_feature(cxx_rtti)
+//^ GCC __GXX_RTTI
+//^ MSVC _CPPRTTI
+//^ 探测到就 #define LOGURU_RTTI 1。库里用它给 stack trace 做名字替换：typeid(std::string).name() 
+//^ 经 demangle 后，把冗长的类型名收成 std::string。RTTI 关掉时这段不编译，避免调用 typeid。
 #if defined(__clang__)
 	#if __has_feature(cxx_rtti)
 		#define LOGURU_RTTI 1
@@ -223,6 +235,15 @@ Website: www.ilikebigbits.com
 	// Helper macro for declaring functions as having similar signature to printf.
 	// This allows the compiler to catch format errors at compile-time.
 	#define LOGURU_PRINTF_LIKE(fmtarg, firstvararg) __attribute__((__format__ (__printf__, fmtarg, firstvararg)))
+	//^ 这是 GCC/Clang 的函数属性，用来声明「这个函数的参数长得像 printf」，让编译器在编译期检查格式串。
+	//^ __attribute__((__format__(__printf__, fmtarg, firstvararg)))
+	//^ 片段	含义
+	//^ __attribute__((...)) GCC/Clang 扩展，给声明附加元数据
+	//^ __format__ 属性名：按格式串函数来检查
+	//^ __printf__ 格式规则跟 printf 一样（%d、%s 等）
+	//^ fmtarg 格式串是第几个参数，从 1 起算
+	//^ firstvararg 格式串消费的第一个实参是第几个；0 表示参数走 va_list，不逐个检查
+	//^ 宏 LOGURU_PRINTF_LIKE(fmtarg, firstvararg) 只是把上面这串包起来。调用处写在函数声明末尾
 	#define LOGURU_FORMAT_STRING_TYPE const char*
 #elif defined(_MSC_VER)
 	#define LOGURU_PRINTF_LIKE(fmtarg, firstvararg)
@@ -265,33 +286,71 @@ Website: www.ilikebigbits.com
 // --------------------------------------------------------------------
 LOGURU_ANONYMOUS_NAMESPACE_BEGIN
 
+//v namespace 给名字划分作用域，避免不同库里的同名类型、函数撞在一起。
+//v 花括号里的 Text、add_callback 全名是 loguru::Text、loguru::add_callback。:: 是作用域解析运算符。同一个命名空间可以在多个文件里再次打开，后写的声明仍然属于 loguru。
+//v 调用处要么写全名 loguru::Text，要么先 using namespace loguru;，之后可以直接写 Text。头文件里通常不写后者，以免把名字灌进包含它的所有代码。
 namespace loguru
 {
 	// Simple RAII ownership of a char*.
 	class LOGURU_EXPORT Text
 	{
 	public:
-		explicit Text(char* owned_str) : _str(owned_str) {} /// 禁止 char* 隐式转为 Text；构造函数体执行前，用 owned_str 初始化私有成员 _str
-		~Text(); 
-		Text(Text&& t)
+		explicit Text(char* owned_str) : _str(owned_str) {} 
+		//^ 禁止 char* 隐式转为 Text；构造函数体执行前，用 owned_str 初始化私有成员 _str
+		~Text();  //- 声明析构函数   
+		Text(Text&& t)   //- 定义移动构造函数
 		{
 			_str = t._str;
 			t._str = nullptr;
 		}
-		Text(Text& t) = delete;
-		Text& operator=(Text& t) = delete;
-		void operator=(Text&& t) = delete;
+		Text(Text& t) = delete; //- 禁止拷贝构造函数
+		Text& operator=(Text& t) = delete; //- 禁止拷贝赋值运算符
+		void operator=(Text&& t) = delete; //- 禁止移动赋值运算符
+		/*  禁止拷贝构造函数和拷贝赋值运算符的用法：
+		char* p = strdup("hello");
+		char* q = strdup("world");
+		Text src(p);              // 对应显式构造
+		Text t1(std::move(src));  // 移动构造 Text(Text&&)
 
-		const char* c_str() const { return _str; }
+		Text a(q);
+		Text b(a);                // 拷贝构造 Text(Text&)，被 delete
+		Text c = a;               // 同样是拷贝构造, 被 delete
+
+		Text d(strdup("x"));
+		Text e(strdup("y"));
+		e = d;                    // 拷贝赋值 operator=(Text&)，被 delete
+		e = std::move(d);         // 移动赋值 operator=(Text&&)，被 delete
+		*/
+
+		const char* c_str() const { return _str; }  
+		//^ const char*：返回的是指向常量字符的指针。调用方不能通过这个指针改字符串内容。指针本身按值返回，调用方可以改自己手里的那份指针。 
+		//^ c_str() const：这是 const 成员函数。const Text 对象也能调用它；函数内不能给 _str 重新赋值。
+		//^  -------------------------- 关于 c_str() 的解释 --------------------------
+		//^ 类内定义的成员函数，按标准是隐式 inline 成员函数（[class.mfct]）。c_str() 这种写法就是声明兼定义，不需要再在类外写一份。
+		//^ 调用时通过对象、引用或指针，并带上隐式 this：
+		//^ Text t(buf);
+		//^ const char* s = t.c_str();   // this 指向 t
+		//^ const 成员函数只能由 const 对象调用，函数内不能修改非 mutable 成员。
+		//^ inline 的标准含义是：该定义可以出现在多个翻译单元里，只要各份完全相同，就不违反 ODR。
+		//^ 所以这些函数可以写在被多处包含的头文件中。编译器是否把函数体展开到调用点，由实现决定。
+		//^ 类内只声明、类外再定义的函数（如 ~Text()）没有这个隐式 inline。它在 loguru.cpp 里只有一份定义，头文件里只能放声明。
+
 		bool empty() const { return _str == nullptr || *_str == '\0'; }
 
 		char* release()
 		{
-			auto result = _str;
+			auto result = _str; //- auto 是 C++11 引入的类型推导关键字，用于自动推导变量的类型。
+			//^ 在这里，auto 会自动推导 result 的类型为 char*，因为 _str 的类型就是 char*。
+			//^ 这样写的好处是，当 _str 的类型发生变化时，result 的类型会自动适应，不需要手动修改。
+
 			_str = nullptr;
 			return result;
 		}
 
+	//v private 是访问说明符。从它开始，直到下一个 public: / protected: 或类结束，里面的成员只能由本类的成员函数和 friend 使用。
+	//v 这是编译期检查，不是运行时把内存藏起来。_str 仍然在对象里，只是别的代码不能按名字访问它。
+	//v 派生类也访问不了 private 成员。若希望子类能用、类外不能用，应写成 protected:。
+	//v class 默认就是 private，这里先写了 public:，所以要再写一次 private: 才能把 _str 收进去。struct 默认则是 public。
 	private:
 		char* _str;
 	};
@@ -301,11 +360,33 @@ namespace loguru
 	LOGURU_EXPORT
 	Text vtextprintf(const char* format, fmt::format_args args);
 
+	//v 模板是编译期的代码模具。template 开头的声明本身还不是一份可直接调用的函数，而是一份蓝图。
+	//v 调用时编译器按实参类型生成具体代码，这个过程叫模板实例化（instantiation）。
+	//v 例如 textprintf("n={}", 42) 会生成 Args 里只有 int 的那一份函数。
+	//v template<typename T> 里的 T 是类型参数。这里的 typename 和 class 含义相同，不要求 T 必须是类。
+	//v 函数模板：template<typename T> void f(T x);
+	//v 类模板：template<typename T> class Box { T value; }; 使用时要写成 Box<int>。
+	//v typename... Args 是参数包（parameter pack），代表零个或多个类型。这就是可变参数模板。
+	//v 函数参数写成 const Args&... args 时，每个实参都按 const 引用绑定。
+	//v 调用处写 args... 是包展开（pack expansion），把包里的参数按顺序传给后面的函数。
+	//v 模板的定义通常要放在头文件里。实例化发生在调用点，编译器当时必须看见完整定义。
 	template<typename... Args>
 	LOGURU_EXPORT
 	Text textprintf(LOGURU_FORMAT_STRING_TYPE format, const Args&... args) {
 		return vtextprintf(format, fmt::make_format_args(args...));
 	}
+	//^ 这是一个可变参数函数模板（variadic function template）。调用 textprintf("n={}", 42) 时，编译器按实参个数和类型生成一份具体函数。
+	//^ ------------------------------------------------------------------------------------------------------------------
+	//^ 片段								| 语法角色
+	//^ ------------------------------------------------------------------------------------------------------------------
+	//^ template<typename... Args> 		   | 声明模板。Args 是 parameter pack，代表零个或多个类型
+	//^ LOGURU_EXPORT 						| 宏，控制符号是否导出，不是 C++ 语法 
+	//^ Text textprintf(...) 				| 函数名 textprintf，返回类型是前面的 Text
+	//^ LOGURU_FORMAT_STRING_TYPE format 	| 普通参数。这个宏在这里展开成 const char*，即格式串
+	//^ const Args&... args 				| 函数参数包。每个实参都按 const T& 绑定，避免拷贝
+	//^ args... 							| 把参数包展开成 make_format_args 的实参列表
+	//^ ------------------------------------------------------------------------------------------------------------------
+	//^ 函数体把格式串和展开后的参数交给 vtextprintf。fmt::make_format_args 把各类型参数收成一个 fmt::format_args，所以真正做格式化的 vtextprintf 不必再写成模板。
 #else
 	LOGURU_EXPORT
 	Text textprintf(LOGURU_FORMAT_STRING_TYPE format, ...) LOGURU_PRINTF_LIKE(1, 2);
@@ -315,7 +396,9 @@ namespace loguru
 	LOGURU_EXPORT
 	Text textprintf();
 
-	using Verbosity = int;
+	using Verbosity = int; //- using 是 C++11 引入的语法，用于定义类型别名。
+	//^ 在这里，using Verbosity = int; 定义了一个名为 Verbosity 的类型别名，等价于 typedef int Verbosity;。
+	//^ 这样写的好处是，当 Verbosity 的类型发生变化时，只需要修改一处定义，不需要修改所有使用的地方。
 
 #undef FATAL
 #undef ERROR
@@ -323,7 +406,11 @@ namespace loguru
 #undef INFO
 #undef MAX
 
-	enum NamedVerbosity : Verbosity
+	//v ":"后面是枚举的底层类型（underlying type），不是继承。
+	//v Verbosity 是 int 的别名，所以这行等价于：
+	//v enum NamedVerbosity : int
+	//v NamedVerbosity 仍是独立的枚举类型。它的枚举值按 int 存储，无作用域枚举可以隐式转换成 int。这里没有基类，也不能当派生类用。
+	enum NamedVerbosity : Verbosity 
 	{
 		// Used to mark an invalid verbosity. Do not log to this level.
 		Verbosity_INVALID = -10, // Never do LOG_F(INVALID)
@@ -410,12 +497,22 @@ namespace loguru
 	// Verbosity_INVALID if name is not recognized.
 	typedef Verbosity (*name_to_verbosity_t)(const char* name);
 
+	//v C++ 里用 struct 或 class 定义出来的都是类（class）。标准把这两种写法都叫 class type。
+	//v 二者默认访问权限不同：struct 的成员默认 public，class 的成员默认 private。
+	//v 除此之外可以同样写构造函数、成员函数、继承和默认成员初始化。SignalOptions 因此既是 struct，也是一个类。
 	struct SignalOptions
 	{
 		/// Make Loguru try to do unsafe but useful things,
 		/// like printing a stack trace, when catching signals.
 		/// This may lead to bad things like deadlocks in certain situations.
 		bool unsafe_signal_handler = true;
+		//^ 这是 C++11 的默认成员初始化（default member initializer）。= true 写在类定义里，但不会在定义类型时执行，而是在创建 SignalOptions 对象、且构造函数没有另行指定该成员时，用 true 初始化它。
+		//^ SignalOptions options;  // unsafe_signal_handler 此时为 true
+		//^ 这个结构体没有手写构造函数，编译器生成的默认构造函数会采用这些初值。
+		//^ 后面的 sigabrt = true 等同理。none() 先这样构造，再逐个改成 false：
+		//^ SignalOptions options;
+		//^ options.unsafe_signal_handler = false;
+		//^ 如果某个构造函数的初始化列表写了 unsafe_signal_handler(false)，这次构造就不会再用类里的 = true。
 
 		/// Should Loguru catch SIGABRT ?
 		bool sigabrt = true;
@@ -438,7 +535,7 @@ namespace loguru
 		/// Should Loguru catch SIGTERM ?
 		bool sigterm = true;
 
-		static SignalOptions none()
+		static SignalOptions none() //- notes: none 不是构造函数，编译器不会自动调用它
 		{
 			SignalOptions options;
 			options.unsafe_signal_handler = false;
@@ -459,6 +556,10 @@ namespace loguru
 		// This allows you to use something else instead of "-v" via verbosity_flag.
 		// Set to nullptr if you don't want Loguru to parse verbosity from the args.
 		const char* verbosity_flag = "-v";
+		//^ const char * a 里，const 修饰的是 char，也就是 *a。
+		//^ *a 不可改：不能写 *a = 'x'。
+		//^ a 可以改：可以写 a = 另一个地址，让它改指向别的字符。
+		//^ 指针本身不可改的写法是 char * const a。两边都不可改则是 const char * const a。
 
 		// loguru::init will set the name of the calling thread to this.
 		// If you don't want Loguru to set the name of the main thread,
@@ -589,6 +690,15 @@ namespace loguru
 		Verbosity       verbosity,
 		close_handler_t on_close = nullptr,
 		flush_handler_t on_flush = nullptr);
+	//^ 这是函数参数的默认实参（default argument）。= nullptr 写在声明里，表示调用时如果省略这个参数，编译器就在调用点补上 nullptr。
+	//^ 因此这三种调用都合法：
+	//^ add_callback(id, cb, data, verbosity);
+	//^ add_callback(id, cb, data, verbosity, my_close);
+	//^ add_callback(id, cb, data, verbosity, my_close, my_flush);
+	//^ 前两种里，被省略的参数在调用点变成 nullptr。函数体拿到的仍然是一个实实在在的参数，并不会知道调用方当初写没写。
+	//^ 语法上有两条限制：
+	//^ 默认实参只能出现在参数列表的尾部。这里 on_close 有默认值，它后面的 on_flush 也必须有。
+	//^ 同一个参数的默认值只能写一次，所以头文件里写了，loguru.cpp 里的定义就不再重复 = nullptr。
 
 	/*  Set a callback that returns custom verbosity level names. If callback
 		is nullptr or returns nullptr, default log names will be used.
@@ -740,6 +850,9 @@ namespace loguru
 	LOGURU_EXPORT
 	void flush();
 
+	//v 这里的 class 表示 T 是类型参数，和 template<typename T> 完全相同。它不要求传进来的必须是类。
+	//v T 可以是 int、char、指针或某个类。没有专门特化的类型走这个主模板，打印 "N/A"。
+	//v char、int、float 这些内置类型走后面的特化，说明 class 并没有把非类类型排除在外。
 	template<class T> inline Text format_value(const T&)                    { return textprintf("N/A");     }
 	template<>        inline Text format_value(const char& v)               { return textprintf(LOGURU_FMT(c),   v); }
 	template<>        inline Text format_value(const int& v)                { return textprintf(LOGURU_FMT(d),   v); }
@@ -864,13 +977,15 @@ namespace loguru
 	{
 	public:
 		EcEntryBase(const char* file, unsigned line, const char* descr);
-		virtual ~EcEntryBase();
+		virtual ~EcEntryBase(); //- 虚函数。用基类指针删除派生类对象时，会先调派生类析构，再调这个基类析构。 
 		EcEntryBase(const EcEntryBase&) = delete;
 		EcEntryBase(EcEntryBase&&) = delete;
 		EcEntryBase& operator=(const EcEntryBase&) = delete;
 		EcEntryBase& operator=(EcEntryBase&&) = delete;
 
 		virtual void print_value(StringStream& out_string_stream) const = 0;
+		//^ 纯虚函数是在声明末尾写了 = 0 的虚函数。基类不提供可以单独使用的实现，派生类必须自己实现（override），否则派生类同样不能创建对象。
+		//^ 含有纯虚函数的类是抽象类，不能直接构造。 EcEntryBase 因此不能写成 EcEntryBase x(...)。
 
 		EcEntryBase* previous() const { return _previous; }
 
@@ -881,6 +996,19 @@ namespace loguru
 		EcEntryBase* _previous = nullptr;
 	};
 
+	//v 下面三行定义了一个公有继承 EcEntryBase 的类模板。T 换成具体类型后，才会生成一个真正的类。
+    //v template<typename T>
+    //v class EcEntryData : public EcEntryBase
+    //v {
+    //v 片段	                     含义
+	//v -------------------------------------------------------------------------------------------------
+	//v template<typename T>        T 是类型参数。EcEntryData<int> 和 EcEntryData<const char*> 是两个不同的类
+    //v class EcEntryData           类名
+    //v : public EcEntryBase        公有继承。EcEntryData<T> 含有一个 EcEntryBase 子对象，并能使用基类的公有接口
+	//v -------------------------------------------------------------------------------------------------
+    //v public 继承表示「是一个」：EcEntryData<T> 对象可以当作 EcEntryBase 使用。基类里的 print_value 是纯虚函数，派生类必须实现它。
+	//v 于是基类指针 EcEntryBase* 可以指向不同 T 的 EcEntryData，调用时按实际类型走到对应的 print_value。
+    //v 构造时先初始化基类子对象，所以构造函数的初始化列表第一项是 EcEntryBase(file, line, descr)。
 	template<typename T>
 	class EcEntryData : public EcEntryBase
 	{
@@ -890,6 +1018,14 @@ namespace loguru
 		EcEntryData(const char* file, unsigned line, const char* descr, T data, Printer&& printer)
 			: EcEntryBase(file, line, descr), _data(data), _printer(printer) {}
 
+		//v 普通虚函数，同样用 virtual 声明，但没有 = 0，基类里有函数体，派生类可以选择覆盖。
+		//v override 标明：这个函数要覆盖基类里的同名虚函数。编译器会核对其签名是否与基类完全一致，对不上就报错。
+		//v virtual void print_value(StringStream& out_string_stream) const override
+		//v 它对应基类的纯虚函数：
+		//v virtual void print_value(StringStream& out_string_stream) const = 0;
+		//v 名字、参数、const 都一致，所以 EcEntryData<T> 实现了 print_value。通过 EcEntryBase* 调用时，会执行这里的函数体。
+		//v 如果少写 const，或参数类型写错，没有 override 时这会变成另一个新函数，基类的纯虚函数仍然没被实现。
+		//v 加上 override 后，这种不匹配会直接编译失败。virtual 在派生类里可以省略，写上只是为了阅读时能看出它是虚函数。
 		virtual void print_value(StringStream& out_string_stream) const override
 		{
 			const auto str = _printer(_data);
@@ -938,6 +1074,26 @@ namespace loguru
 
 	template <class T>
 	struct make_ec_type { using type = typename make_const_ptr<typename decay_char_array<T>::type>::type; };
+
+	//^^ using type = ... 是结构体内的成员类型别名，名字固定叫 type。
+	//^^  这些结构体不保存数据，只做类型变换：传入 T，从 ::type 取出结果。
+	//^^  主模板是默认规则，特化是例外。
+	//^^ 
+	//^^  decay_char_array：默认原样返回；只有 const char 数组的引用才变成指针。
+	//^^    decay_char_array<int>::type               -> int
+	//^^    decay_char_array<const char(&)[6]>::type  -> const char*
+	//^^  字符串字面量的类型是 const char[N]，传参时常变成 const char(&)[N]，这一步把它收成 const char*。
+	//^^ 
+	//^^  make_const_ptr：默认原样返回；只有指针才给指向的类型加上 const。
+	//^^    make_const_ptr<int>::type    -> int
+	//^^    make_const_ptr<char*>::type  -> const char*
+	//^^ 
+	//^^  make_ec_type：先做 decay_char_array，再做 make_const_ptr。
+	//^^  ::type 依赖模板参数，所以前面必须写 typename。
+	//^^    make_ec_type<const char(&)[6]>::type -> const char*
+	//^^    make_ec_type<int*>::type             -> const int*
+	//^^    make_ec_type<int>::type              -> int
+	//^^  ERROR_CONTEXT 用这个结果作为 EcEntryData<...> 的类型参数。
 
 	/* 	A stack trace gives you the names of the function at the point of a crash.
 		With ERROR_CONTEXT, you can also get the values of select local variables.
