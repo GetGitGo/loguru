@@ -1222,6 +1222,15 @@ namespace loguru
 
 LOGURU_ANONYMOUS_NAMESPACE_END
 
+//v 宏由预处理器处理。编译真正开始之前，它按文本替换展开，不是函数，也没有类型检查。
+//v #define 定义宏，#undef 取消已有定义。
+//v 对象式宏没有参数：#define STRDUP(str) strdup(str) 这种带参数的叫函数式宏。
+//v 函数式宏的每个参数，以及整个替换结果，通常都要加括号，避免展开后和周围运算符抢优先级。
+//v 参数里写 ... 表示接受任意多个实参，替换时用 __VA_ARGS__ 原样放回去。LOG_F(INFO, "n=%d", 42) 用的就是这个。
+//v # 参数 会把参数变成字符串；## 会把两边的记号拼成一个名字，例如 Verbosity_ ## INFO 变成 Verbosity_INFO。
+//v __FILE__ 和 __LINE__ 是预定义宏，展开成当前源文件名和行号。
+//v 定义写不下时，行末加 \ 续行。\ 必须是这一行的最后一个字符。
+//v 宏只做文本替换，不会检查参数类型，也不能递归展开自己。能用函数、constexpr 或模板表达时，通常不用宏。
 // --------------------------------------------------------------------
 // Logging macros
 
@@ -1415,6 +1424,13 @@ namespace loguru
 		StreamLogger(Verbosity verbosity, const char* file, unsigned line) : _verbosity(verbosity), _file(file), _line(line) {}
 		~StreamLogger() noexcept(false);
 
+		//v operator 用来重载运算符。operator<< 定义的是：当左操作数是 StreamLogger 时，<< 做什么。
+		//v 它是成员函数。<< 左边的对象就是 *this，右边的值是参数 t。
+		//v logger << 42 等价于 logger.operator<<(42)。函数体里再把 42 送进内部的字符串流 _ss。
+		//v 返回 StreamLogger& 是为了连续写：logger << a << b 会先执行左边的 <<，再用返回的自身去接 b。
+		//v 返回引用才不会每接一次就拷贝出一个新对象。
+		//v 运算符的优先级和操作数个数保持语言原样，重载只改它在这个类型上的含义。
+		//v =、[]、() 必须写成成员函数；<< 也可以写成类外的非成员函数。
 		template<typename T>
 		StreamLogger& operator<<(const T& t)
 		{

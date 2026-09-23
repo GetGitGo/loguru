@@ -145,6 +145,15 @@ LOGURU_ANONYMOUS_NAMESPACE_BEGIN
 
 namespace loguru
 {
+	//v using namespace std::chrono; 是一条 using 指令。
+	//v 从这一行起，当前作用域里可以直接写 std::chrono 中的名字，不必每次加上 std::chrono::。
+	//v 它写在 namespace loguru 内部，所以只影响这个 .cpp 里 loguru 命名空间的其余部分。
+	//v 后面的 steady_clock、system_clock、duration_cast、milliseconds 都因此可以简写。
+	//v 全名仍然合法，所以同一文件里也可以继续写 std::chrono::milliseconds。
+	//v 只引入一个名字时用 using 声明：using std::chrono::steady_clock;
+	//v using namespace 会把该命名空间里的名字都引进来。
+	//v 放在头文件的全局作用域时，每个包含该头文件的翻译单元都会带上这些名字，容易和别的库撞名。
+	//v 放在 .cpp 的函数或命名空间内部，影响范围就限于这一处。
 	using namespace std::chrono;
 
 #if LOGURU_WITH_FILEABS
