@@ -227,6 +227,7 @@ Website: www.ilikebigbits.com
 
 #ifdef __COUNTER__
 #   define LOGURU_ANONYMOUS_VARIABLE(str) LOGURU_CONCATENATE(str, __COUNTER__)
+//^ __COUNTER__ 不在 C 和 C++ 标准的预定义宏里。GCC、Clang、MSVC 都提供它：每展开一次就得到一个整数，从 0 开始逐次加 1。
 #else
 #   define LOGURU_ANONYMOUS_VARIABLE(str) LOGURU_CONCATENATE(str, __LINE__)
 #endif
@@ -298,10 +299,18 @@ namespace loguru
 		explicit Text(char* owned_str) : _str(owned_str) {} 
 		//^ 禁止 char* 隐式转为 Text；构造函数体执行前，用 owned_str 初始化私有成员 _str
 		~Text();  //- 声明析构函数   
+		//^ 这就是 RAII：资源获取即初始化。获取放在构造函数里，释放放在析构函数里，不靠调用方记得手动 free。
+
 		Text(Text&& t)   //- 定义移动构造函数
 		{
 			_str = t._str;
 			t._str = nullptr;
+			//^ nullptr 是 C++11 的空指针常量，类型是 std::nullptr_t。
+			//^ 它可以隐式转换成任何对象指针、函数指针或成员指针，转换结果是对应类型的空指针。
+			//^ s_fatal_handler = nullptr 表示这个函数指针当前不指向任何函数。
+			//^ 用指针之前要判断它是不是 nullptr，对空指针解引用是未定义行为。
+			//^ 它不是整数。NULL 常被定义成 0，重载时可能匹配到 int 参数；nullptr 只会匹配指针参数。
+			//^ 和指针比较、赋值都可以：p == nullptr、p = nullptr。
 		}
 		Text(Text& t) = delete; //- 禁止拷贝构造函数
 		Text& operator=(Text& t) = delete; //- 禁止拷贝赋值运算符
@@ -812,6 +821,10 @@ namespace loguru
 		}
 #else
 		LogScopeRAII(LogScopeRAII&&) = default;
+		//^ = default 让编译器生成该成员的默认实现，而不是自己写函数体。
+		//^ 这里是移动构造函数：按成员逐个移动，指针和整数就是拷贝其值。
+		//^ 上面 MSVC 的手写版本还会把 other._file 置空，默认版本不会。
+		//^ 同文件里的 = delete 则是禁止该函数，调用时直接编译失败。
 #endif
 
 	private:
@@ -819,12 +832,16 @@ namespace loguru
 		LogScopeRAII& operator=(const LogScopeRAII&) = delete;
 		void operator=(LogScopeRAII&&) = delete;
 
+		//v 非静态成员默认初始化
+		//v 创建对象时，如果构造函数的初始化列表没有另行指定该成员，就用这里的值。
+		//v _file、_line、_indent_stderr、_start_time_ns 也是同样的写法。
 		Verbosity   _verbosity = Verbosity_INVALID;
 		const char* _file = nullptr; // Set to null if we are disabled due to verbosity
 		unsigned    _line = 0;
 		bool        _indent_stderr = false; // Did we?
 		long long   _start_time_ns = 0;
 		char        _name[LOGURU_SCOPE_TEXT_SIZE] = {};
+		//^ {} 对这个 char 数组做值初始化，每个元素都变成 '\0'。
 	};
 
 	// Marked as 'noreturn' for the benefit of the static analyzer and optimizer.
@@ -1065,6 +1082,8 @@ namespace loguru
 
 	template <unsigned long long  N>
 	struct decay_char_array<const char(&)[N]> { using type = const char*; };
+	//^ const char(&)[N] 是数组引用：引用绑定一整块长度为 N 的 const char 数组，数组不会退化成指针。
+	//^ 字符串字面量传进来时走这份特化，type 变成 const char*。
 
 	template <class T>
 	struct make_const_ptr { using type = T; };
@@ -1127,6 +1146,11 @@ namespace loguru
 			LOGURU_ANONYMOUS_VARIABLE(error_context_scope_)(                       \
 				__FILE__, __LINE__, descr, data,                                   \
 				static_cast<loguru::EcEntryData<loguru::make_ec_type<decltype(data)>::type>::Printer>(loguru::ec_to_text) ) // For better error messages
+				//^ decltype(expr) 在编译期得到 expr 的类型，不计算 expr 的值。
+				//^ 这里 decltype(data) 是宏参数 data 那个表达式的类型。
+				//^ 若 data 是变量名，得到的是它声明时的类型，不会额外加上引用。
+				//^ 结果再交给 make_ec_type：字符数组收成指针，指针补上 const。
+				//^ decltype((data)) 多一层括号时，左值会得到 T&，和 decltype(data) 不同。
 
 /*
 	#define ERROR_CONTEXT(descr, data)                                 \
@@ -1423,6 +1447,7 @@ namespace loguru
 	public:
 		StreamLogger(Verbosity verbosity, const char* file, unsigned line) : _verbosity(verbosity), _file(file), _line(line) {}
 		~StreamLogger() noexcept(false);
+		//^ noexcept(false) 表示这个析构函数允许抛出异常。
 
 		//v operator 用来重载运算符。operator<< 定义的是：当左操作数是 StreamLogger 时，<< 做什么。
 		//v 它是成员函数。<< 左边的对象就是 *this，右边的值是参数 t。

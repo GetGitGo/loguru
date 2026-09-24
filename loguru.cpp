@@ -264,6 +264,14 @@ namespace loguru
 	}();
 	//^ 这一行用一个立即调用的 lambda 给静态常量做初始化。
 	//^ [](){ ... }() 先定义一个无名函数，末尾的 () 立刻调用它，返回值赋给 s_terminal_has_color。
+	//^ [] 是捕获列表。空的 [] 不捕获外部变量，函数体只用参数和全局名字。
+	//^ () 是参数列表，可以写 int x 这样的参数；这里没有参数。
+	//^ 末尾再写 () 才会调用。只写 [](){} 得到的是函数对象，不会执行。
+	//^ 捕获可写成 [x]、[&x] 或 [=]。[=] 按值拷贝用到的自动变量。
+	//^ int n = 2;
+	//^ auto add = [n](int x) { return n + x; };
+	//^ int y = add(3);   // y 为 5。n 按值捕获进 add
+
 
 	static void print_preamble_header(char* out_buff, size_t out_buff_size);
 
@@ -1077,6 +1085,11 @@ namespace loguru
 		thread_local static char thread_name[LOGURU_THREADNAME_WIDTH + 1] = {0};
 		return &thread_name[0];
 	}
+	//^ thread_local 是存储期说明符。每个线程各有一份该变量，互不共享。
+	//^ 这里写在函数里，thread_local static 与 static thread_local 含义相同。
+	//^ 某线程第一次执行到该声明时初始化自己的那一份，线程结束时销毁。
+	//^ 一个线程改 thread_name，不会影响其他线程里的同名数组。
+	//^ 它和普通 static 不同：static 全进程一份，thread_local 每线程一份。
 #endif // LOGURU_WINTHREADS
 
 	void set_thread_name(const char* name)
@@ -1186,6 +1199,8 @@ namespace loguru
 		}
 	#endif // LOGURU_RTTI
 
+	//v StringPairList 是 std::vector<std::pair<std::string, std::string>>。
+	//v 外层 {} 变成 initializer_list，里面每一对 {} 再初始化一个 pair。
 	static const StringPairList REPLACE_LIST = {
 		#if LOGURU_RTTI
 			{ type_name<std::string>(),    "std::string"    },
@@ -1200,6 +1215,12 @@ namespace loguru
 
 	void do_replacements(const StringPairList& replacements, std::string& str)
 	{
+		//v  这是 C++11 的范围 for。它逐个取出 replacements 里的元素，循环变量叫 p。
+		//v replacements 的类型是 const std::vector<std::pair<std::string, std::string>>&。
+		//v 每个元素是一对字符串：p.first 是要找的原文，p.second 是替换成的文字。
+		//v auto 让编译器根据元素类型推导 p 的类型。&& 在这里绑定成 const std::pair<std::string,
+		//v std::string>&，直接引用容器里的那一项，不拷贝两个 std::string。
+		//v 容器本身是 const，所以循环里不能改 p。
 		for (auto&& p : replacements) {
 			if (p.first.size() <= p.second.size()) {
 				// On gcc, "type_name<std::string>()" is "std::string"
@@ -1211,6 +1232,11 @@ namespace loguru
 				str.replace(it, p.first.size(), p.second);
 			}
 		}
+		//^ 右值引用的写法是 T&&。它绑定即将销毁或被移走的对象，例如临时量、std::move(x) 的结果。
+		//^ 普通左值（有名字、还能继续用的对象）不能绑到 T&& 上。
+		//^ 绑定之后可以掏走它的资源，比如把指针拿走再把对方置空，避免再拷贝一份。Text 的移动构造函数 Text(Text&& t) 就是这样。
+		//^ 函数参数写成 T&& 且 T 是模板参数时，或写成 auto&& 时，这是转发引用，左值和右值都能绑。
+		//^ 上一行 for (auto&& p : replacements) 属于这种，p 实际是 const 左值引用。
 	}
 
 	std::string prettify_stacktrace(const std::string& input)
@@ -1222,6 +1248,10 @@ namespace loguru
 
 		try {
 			std::regex std_allocator_re(R"(,\s*std::allocator<[^<>]+>)");
+			//^ R"(...)" 是原始字符串字面量。引号里的字符按原样保存，不处理转义。
+			//^ 这里的 \s 是正则的空白符，不是 C++ 里的转义序列。
+			//^ 普通字符串要写成 ",\\s*..."，每个反斜杠都得再转义一次。
+			//^ 正文里若要出现 )"，就换分隔符，写成 R"delim(...)delim"。
 			output = std::regex_replace(output, std_allocator_re, std::string(""));
 
 			std::regex template_spaces_re(R"(<\s*([^<> ]+)\s*>)");
@@ -1229,6 +1259,11 @@ namespace loguru
 		} catch (std::regex_error&) {
 			// Probably old GCC.
 		}
+		//^ try 后面的复合语句是受保护的代码。其中抛出的异常会转去匹配 catch。
+		//^ catch (std::regex_error&) 只接住这种异常。参数名可以省略。
+		//^ 类型对上才进入该 catch。对不上就继续向外层 try 或调用栈传递。
+		//^ catch (...) 接住任何类型，应写在同一 try 的多个 catch 最后。
+		//^ 没有被接住的异常会调用 std::terminate，程序终止。
 
 		return output;
 	}
@@ -1714,6 +1749,11 @@ namespace loguru
 	{
 		return vstrprintf(format, args...);
 	}
+	//^ 变参模板用 typename... Args 声明参数包，Args 代表零个或多个类型。
+	//^ 函数参数写成 const Args&... args，每个实参按 const 引用绑定。
+	//^ 调用处写 args... 是包展开，把包里的参数按顺序传出去。
+	//^ 调用 vstrprintf("%d", 42) 时，编译器生成 Args 只有 int 的那一份。
+	//^ 模板定义在实例化时必须已经被看见，所以通常写在头文件里。
 #else
 	std::string vstrprintf(const char* format, va_list vlist)
 	{
