@@ -228,6 +228,7 @@ Website: www.ilikebigbits.com
 #ifdef __COUNTER__
 #   define LOGURU_ANONYMOUS_VARIABLE(str) LOGURU_CONCATENATE(str, __COUNTER__)
 //^ __COUNTER__ 不在 C 和 C++ 标准的预定义宏里。GCC、Clang、MSVC 都提供它：每展开一次就得到一个整数，从 0 开始逐次加 1。
+//^ loguru 因此先判断它是否存在，没有就改用标准宏 __LINE__：
 #else
 #   define LOGURU_ANONYMOUS_VARIABLE(str) LOGURU_CONCATENATE(str, __LINE__)
 #endif
