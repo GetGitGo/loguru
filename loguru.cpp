@@ -262,6 +262,8 @@ namespace loguru
 			}
 		#endif
 	}();
+	//^ 这一行用一个立即调用的 lambda 给静态常量做初始化。
+	//^ [](){ ... }() 先定义一个无名函数，末尾的 () 立刻调用它，返回值赋给 s_terminal_has_color。
 
 	static void print_preamble_header(char* out_buff, size_t out_buff_size);
 
@@ -304,6 +306,11 @@ namespace loguru
 #else
 	inline FILE* to_file(void* user_data) { return reinterpret_cast<FILE*>(user_data); }
 #endif
+	//^ 转换	       		作用 
+	//^ static_cast 		编译期确定的相关类型转换，如数值之间、void* 到对象指针、有继承关系的向上转换
+	//^ dynamic_cast 		沿继承关系做运行时检查，需要 RTTI。指针转失败得到空指针，引用转失败抛 std::bad_cast
+	//^ const_cast 			加上或去掉 const / volatile
+	//^ reinterpret_cast 	按同一块内存的位模式重新解释类型，如无关指针互转、指针和整数互转
 
 	void file_log(void* user_data, const Message& message)
 	{
